@@ -4,41 +4,36 @@ from app.graders.base import BaseGrader
 from app.models import SQLReward
 
 CANONICAL_QUERY = """
-WITH q2_active AS (
-    SELECT DISTINCT customer_id
-    FROM orders
-    WHERE order_date BETWEEN '2023-04-01' AND '2023-06-30'
-      AND status = 'completed'
-),
-q3_active AS (
-    SELECT DISTINCT customer_id
-    FROM orders
-    WHERE order_date BETWEEN '2023-07-01' AND '2023-09-30'
-      AND status = 'completed'
-),
-churned AS (
-    SELECT q2.customer_id
-    FROM q2_active q2
-    LEFT JOIN q3_active q3 ON q2.customer_id = q3.customer_id
-    WHERE q3.customer_id IS NULL
-),
-customer_stats AS (
-    SELECT o.customer_id,
-           ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_spend,
-           MAX(o.order_date) AS last_order_date
+WITH monthly_segment AS (
+    SELECT
+        strftime('%Y-%m', o.order_date) AS month,
+        c.segment,
+        ROUND(SUM(oi.quantity * oi.unit_price), 2) AS revenue,
+        COUNT(DISTINCT o.customer_id) AS unique_customers
     FROM orders o
+    JOIN customers c ON o.customer_id = c.id
     JOIN order_items oi ON o.id = oi.order_id
     WHERE o.status = 'completed'
-    GROUP BY o.customer_id
+      AND o.order_date BETWEEN '2023-01-01' AND '2023-12-31'
+    GROUP BY strftime('%Y-%m', o.order_date), c.segment
 )
-SELECT c.name,
-       c.segment,
-       cs.total_spend,
-       CAST(julianday('2023-09-30') - julianday(cs.last_order_date) AS INTEGER) AS days_since_last_order
-FROM churned ch
-JOIN customers c ON ch.customer_id = c.id
-JOIN customer_stats cs ON ch.customer_id = cs.customer_id
-ORDER BY cs.total_spend DESC
+SELECT
+    month,
+    segment,
+    revenue,
+    unique_customers,
+    ROUND(AVG(revenue) OVER (
+        PARTITION BY segment
+        ORDER BY month
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ), 2) AS rolling_3m_avg,
+    ROUND(
+        (revenue - LAG(revenue) OVER (PARTITION BY segment ORDER BY month))
+        * 100.0 / LAG(revenue) OVER (PARTITION BY segment ORDER BY month),
+    1) AS mom_growth_pct,
+    RANK() OVER (PARTITION BY month ORDER BY revenue DESC) AS segment_rank
+FROM monthly_segment
+ORDER BY month, segment_rank
 """
 
 
@@ -48,15 +43,42 @@ class HardGrader(BaseGrader):
         gt, _ = self._safe_execute(CANONICAL_QUERY)
         self._gt_rows = gt
         self._gt_count = len(gt)
-        self._gt_names = {r["name"] for r in gt}
-        self._gt_by_name: Dict[str, Dict] = {r["name"]: dict(r) for r in gt}
-        self._gt_ordered_names = [r["name"] for r in gt]
+        self._gt_by_key: Dict[Tuple[str, str], Dict] = {}
+        self._gt_ordered_keys: List[Tuple[str, str]] = []
+        for r in gt:
+            key = (r["month"], r["segment"])
+            self._gt_by_key[key] = dict(r)
+            self._gt_ordered_keys.append(key)
 
     def _find_col(self, row: Dict, candidates: Tuple[str, ...]) -> Optional[str]:
         for key in row.keys():
             if key.lower() in candidates:
                 return key
         return None
+
+    def _extract_key(self, row: Dict) -> Optional[Tuple[str, str]]:
+        month_col = self._find_col(row, ("month", "yr_month", "year_month", "period"))
+        seg_col = self._find_col(row, ("segment",))
+        if month_col and seg_col:
+            return (str(row[month_col]), str(row[seg_col]))
+        return None
+
+    def _float_close(self, a, b, rel_tol: float = 0.02) -> bool:
+        try:
+            a, b = float(a), float(b)
+        except (ValueError, TypeError):
+            return False
+        if b == 0:
+            return abs(a) < 1.0
+        return abs(a - b) / abs(b) < rel_tol
+
+    def _abs_close(self, a, b, abs_tol: float = 0.5) -> bool:
+        """For growth percentages where relative tolerance doesn't make sense."""
+        try:
+            a, b = float(a), float(b)
+        except (ValueError, TypeError):
+            return False
+        return abs(a - b) <= abs_tol
 
     def grade(self, query: str, result_rows: List[Dict], error: Optional[str]) -> SQLReward:
         if error or not result_rows:
@@ -72,99 +94,120 @@ class HardGrader(BaseGrader):
 
         executability = 1.0
 
+        # --- Column matching (7 expected columns) ---
         cols = {k.lower() for k in result_rows[0].keys()}
-        has_name = "name" in cols
+        has_month = any(c in {"month", "yr_month", "year_month", "period"} for c in cols)
         has_segment = "segment" in cols
-        has_spend = any(c in {"total_spend", "spend", "revenue", "amount", "total"} for c in cols)
-        has_days = any(
-            c in {"days_since_last_order", "days_since", "days", "recency"} for c in cols
-        )
+        has_revenue = any(c in {"revenue", "total_revenue", "amount"} for c in cols)
+        has_customers = any(c in {"unique_customers", "customer_count", "customers"} for c in cols)
+        has_rolling = any("rolling" in c or "avg" in c for c in cols)
+        has_growth = any("growth" in c or "mom" in c for c in cols)
+        has_rank = any("rank" in c for c in cols)
+
         column_match = (
-            (0.20 * float(has_name))
-            + (0.25 * float(has_segment))
-            + (0.35 * float(has_spend))
-            + (0.20 * float(has_days))
+            (0.10 * float(has_month))
+            + (0.10 * float(has_segment))
+            + (0.20 * float(has_revenue))
+            + (0.10 * float(has_customers))
+            + (0.20 * float(has_rolling))
+            + (0.15 * float(has_growth))
+            + (0.15 * float(has_rank))
         )
-
-        # --- Name overlap (churn identification accuracy) ---
-        agent_names: List[str] = []
-        for r in result_rows:
-            name_col = self._find_col(r, ("name",))
-            if name_col:
-                agent_names.append(r[name_col])
-
-        agent_name_set = set(agent_names)
-        name_overlap = len(agent_name_set & self._gt_names)
-        name_accuracy = name_overlap / max(self._gt_count, 1)
 
         # --- Row count penalty ---
         count_ratio = min(len(result_rows), self._gt_count) / max(
             len(result_rows), self._gt_count, 1
         )
 
-        # --- Value accuracy (total_spend + days_since) per matched row ---
-        spend_matches = 0
-        days_matches = 0
-        matched_rows = 0
+        # --- Value accuracy per matched (month, segment) pair ---
+        revenue_ok = 0
+        rolling_ok = 0
+        growth_ok = 0
+        rank_ok = 0
+        customers_ok = 0
+        matched = 0
+
         for r in result_rows:
-            name_col = self._find_col(r, ("name",))
-            if not name_col or r[name_col] not in self._gt_by_name:
+            key = self._extract_key(r)
+            if key is None or key not in self._gt_by_key:
                 continue
-            gt = self._gt_by_name[r[name_col]]
-            matched_rows += 1
+            gt = self._gt_by_key[key]
+            matched += 1
 
-            spend_col = self._find_col(
-                r, ("total_spend", "spend", "revenue", "amount", "total")
-            )
-            if spend_col:
+            rev_col = self._find_col(r, ("revenue", "total_revenue", "amount"))
+            if rev_col and self._float_close(r[rev_col], gt["revenue"]):
+                revenue_ok += 1
+
+            roll_col = self._find_col(r, ("rolling_3m_avg", "rolling_avg", "rolling_average"))
+            if roll_col and self._float_close(r[roll_col], gt["rolling_3m_avg"]):
+                rolling_ok += 1
+
+            growth_col = self._find_col(r, ("mom_growth_pct", "growth_pct", "mom_growth", "growth"))
+            if growth_col:
+                agent_val = r[growth_col]
+                gt_val = gt["mom_growth_pct"]
+                if agent_val is None and gt_val is None:
+                    growth_ok += 1
+                elif agent_val is not None and gt_val is not None:
+                    if self._abs_close(agent_val, gt_val, 0.5):
+                        growth_ok += 1
+
+            rank_col = self._find_col(r, ("segment_rank", "rank", "seg_rank"))
+            if rank_col:
                 try:
-                    agent_spend = float(r[spend_col])
-                    gt_spend = float(gt["total_spend"])
-                    if gt_spend > 0 and abs(agent_spend - gt_spend) / gt_spend < 0.02:
-                        spend_matches += 1
+                    if int(r[rank_col]) == int(gt["segment_rank"]):
+                        rank_ok += 1
                 except (ValueError, TypeError):
                     pass
 
-            days_col = self._find_col(
-                r, ("days_since_last_order", "days_since", "days", "recency")
+            cust_col = self._find_col(
+                r, ("unique_customers", "customer_count", "customers", "num_customers")
             )
-            if days_col:
+            if cust_col:
                 try:
-                    agent_days = int(float(r[days_col]))
-                    gt_days = int(gt["days_since_last_order"])
-                    if abs(agent_days - gt_days) <= 1:
-                        days_matches += 1
+                    if int(r[cust_col]) == int(gt["unique_customers"]):
+                        customers_ok += 1
                 except (ValueError, TypeError):
                     pass
 
-        denominator = max(self._gt_count, 1)
-        spend_accuracy = spend_matches / denominator
-        days_accuracy = days_matches / denominator
+        d = max(self._gt_count, 1)
+        revenue_acc = revenue_ok / d
+        rolling_acc = rolling_ok / d
+        growth_acc = growth_ok / d
+        rank_acc = rank_ok / d
+        customers_acc = customers_ok / d
 
         row_match = (
-            (0.30 * name_accuracy)
-            + (0.20 * count_ratio)
-            + (0.30 * spend_accuracy)
-            + (0.20 * days_accuracy)
+            (0.10 * count_ratio)
+            + (0.25 * revenue_acc)
+            + (0.25 * rolling_acc)
+            + (0.20 * growth_acc)
+            + (0.10 * rank_acc)
+            + (0.10 * customers_acc)
         )
 
-        # --- Ordering: top-10 by total_spend DESC ---
+        # --- Ordering: check first 12 rows (months 01-04) ---
         ordering_bonus = 0.0
-        if agent_names:
-            top_n = min(10, len(agent_names), len(self._gt_ordered_names))
-            if top_n > 0:
-                agent_top = agent_names[:top_n]
-                gt_top = self._gt_ordered_names[:top_n]
-                positional_hits = sum(
-                    1 for a, g in zip(agent_top, gt_top) if a == g
+        agent_keys: List[Tuple[str, str]] = []
+        for r in result_rows:
+            key = self._extract_key(r)
+            if key:
+                agent_keys.append(key)
+
+        if agent_keys:
+            check_n = min(12, len(agent_keys), len(self._gt_ordered_keys))
+            if check_n > 0:
+                hits = sum(
+                    1 for a, g in zip(agent_keys[:check_n], self._gt_ordered_keys[:check_n])
+                    if a == g
                 )
-                ordering_bonus = positional_hits / top_n
+                ordering_bonus = hits / check_n
 
         correctness = row_match * column_match
         value = round(
             (0.05 * executability)
-            + (0.20 * column_match)
-            + (0.50 * row_match)
+            + (0.15 * column_match)
+            + (0.55 * row_match)
             + (0.25 * ordering_bonus),
             4,
         )

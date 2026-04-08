@@ -33,29 +33,38 @@ TASKS: Dict[str, Task] = {
         difficulty="medium",
         description=(
             "You are a BI Analyst. Find the top 10 customers by total spend in calendar year "
-            "2023 (completed orders only). Return: customer id, customer name, order_count, "
-            "total_spend, avg_order_value. Order by total_spend descending."
+            "2023 (completed orders only). Return: customer id, customer name, order_count "
+            "(use COUNT(DISTINCT o.id)), total_spend (rounded to 2 decimals), avg_order_value "
+            "(rounded to 2 decimals). Order by total_spend descending."
         ),
-        hint_1="Join customers -> orders -> order_items. Filter by year 2023.",
-        hint_2="Use COUNT(DISTINCT o.id) for order count. LIMIT 10.",
+        hint_1="Join customers -> orders -> order_items. Filter by year 2023 and status='completed'.",
+        hint_2="Use COUNT(DISTINCT o.id) for order count, ROUND(..., 2) for monetary values. LIMIT 10.",
         max_steps=10,
     ),
     "hard_churn_cohort": Task(
         id="hard_churn_cohort",
-        name="Churn and Cohort Retention Analysis",
+        name="Monthly Segment Revenue Trend with Growth Analysis",
         difficulty="hard",
         description=(
-            "You are a BI Analyst. Identify churned customers: those who placed at least one "
-            "completed order in Q2 2023 (Apr-Jun) but had zero completed orders in Q3 2023 "
-            "(Jul-Sep). For each churned customer, return: name, segment, total_spend "
-            "(all-time, completed), days_since_last_order (as of 2023-09-30). "
-            "Order by total_spend desc."
+            "You are a BI Analyst. The VP of Sales wants a monthly performance dashboard "
+            "for 2023 broken down by customer segment. For each month and segment, show:\n"
+            "  - month (YYYY-MM format), segment, revenue (completed orders, rounded to 2 decimals)\n"
+            "  - unique_customers (distinct customers who ordered that month)\n"
+            "  - rolling_3m_avg (3-month moving average of revenue, rounded to 2 decimals)\n"
+            "  - mom_growth_pct (month-over-month revenue change as %, rounded to 1 decimal, NULL for first month)\n"
+            "  - segment_rank (rank of each segment within each month by revenue, highest first)\n\n"
+            "Order results by month ascending, then by segment rank ascending."
         ),
         hint_1=(
-            "Use CTEs or subqueries to find Q2 active customers and Q3 active customers "
-            "separately."
+            "You'll need a CTE or subquery to first aggregate revenue per month+segment, "
+            "then compute the derived columns on top of that result. "
+            "In SQLite, use strftime('%Y-%m', date_col) to extract month."
         ),
-        hint_2="LEFT JOIN Q2 -> Q3 WHERE Q3.customer_id IS NULL gives churned set.",
-        max_steps=15,
+        hint_2=(
+            "Window functions are needed for rolling average, growth rate, and ranking. "
+            "Each one requires different PARTITION BY and ORDER BY clauses. "
+            "For rolling average, use ROWS BETWEEN 2 PRECEDING AND CURRENT ROW."
+        ),
+        max_steps=20,
     ),
 }

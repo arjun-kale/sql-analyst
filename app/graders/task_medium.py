@@ -84,16 +84,28 @@ class MediumGrader(BaseGrader):
         id_match = id_overlap / 10.0
 
         value_matches = 0
+        count_matches = 0
         for row in result_rows[:10]:
             cid = self._extract_id(row)
             spend = self._extract_spend(row)
             if cid is not None and spend is not None and cid in self._gt_spends:
                 gt_spend = self._gt_spends[cid]
-                if gt_spend > 0 and abs(spend - gt_spend) / gt_spend < 0.02:
+                if gt_spend > 0 and abs(spend - gt_spend) / gt_spend < 0.01:
                     value_matches += 1
+            if cid is not None and cid in self._gt_counts:
+                for key, val in row.items():
+                    kl = key.lower()
+                    if kl in {"order_count", "orders", "count", "num_orders"}:
+                        try:
+                            if int(val) == self._gt_counts[cid]:
+                                count_matches += 1
+                        except (ValueError, TypeError):
+                            pass
+                        break
         value_accuracy = value_matches / 10.0
+        count_accuracy = count_matches / 10.0
 
-        row_match = (0.4 * id_match) + (0.6 * value_accuracy)
+        row_match = (0.3 * id_match) + (0.5 * value_accuracy) + (0.2 * count_accuracy)
 
         ordering_bonus = 0.0
         if agent_ids[:5] == self._gt_customer_ids[:5]:

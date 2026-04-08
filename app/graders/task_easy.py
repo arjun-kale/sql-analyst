@@ -60,7 +60,7 @@ class EasyGrader(BaseGrader):
 
         correct_rows = 0
         for cat, gt_rev in self._gt_revenues.items():
-            if cat in agent_cats and abs(agent_cats[cat] - gt_rev) / max(gt_rev, 1) < 0.01:
+            if cat in agent_cats and abs(agent_cats[cat] - gt_rev) / max(gt_rev, 1) < 0.005:
                 correct_rows += 1
         row_match = correct_rows / max(len(self._gt_revenues), 1)
 
