@@ -68,14 +68,23 @@ Each step returns a reward in [0.0, 1.0] based on:
 Rewards are **deterministic** — SQL result set comparison is mathematically
 exact with no LLM-as-judge ambiguity.
 
-## Baseline Scores (gpt-4o-mini)
+## Model Benchmark Results (HF Free Models)
 
-| Task                  | Score |
-|-----------------------|-------|
-| easy_sales_report     | 0.87  |
-| medium_customer_ltv   | 0.74  |
-| hard_churn_cohort     | 0.52  |
-| **Average**           | **0.71** |
+Benchmarks were run locally against this environment using:
+
+- `API_BASE_URL=https://router.huggingface.co/v1`
+- `ENV_URL=http://127.0.0.1:7860`
+- the current `inference.py` in this repo
+
+| Model | Easy | Medium | Hard | Avg Score |
+|---|---:|---:|---:|---:|
+| `Qwen/Qwen2.5-7B-Instruct` | 1.00 | 1.00 | 0.69 | **0.90** |
+| `meta-llama/Llama-3.1-8B-Instruct` | 1.00 | 1.00 | 0.54 | **0.85** |
+| `google/gemma-3n-E4B-it` | 1.00 | 0.00 | 0.45 | **0.48** |
+
+The easy task is solvable by all models in a single step. The medium task requires correct join semantics and filtering — smaller models may struggle. The hard task (churn cohort analysis with CTEs) remains unsolved at 1.0 by any 7-8B model, leaving clear headroom for frontier models.
+
+Scores are deterministic for a given model + prompt loop but may shift if providers update hosted model weights.
 
 ## Setup & Usage
 
