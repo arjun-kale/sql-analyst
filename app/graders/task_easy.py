@@ -27,12 +27,13 @@ class EasyGrader(BaseGrader):
 
     def grade(self, query: str, result_rows: List[Dict], error: Optional[str]) -> SQLReward:
         if error or not result_rows:
+            exec_score = 0.0 if error else 0.1
             return SQLReward(
-                value=0.0,
+                value=round(0.05 * exec_score, 4),
                 correctness=0.0,
                 column_match=0.0,
                 row_match=0.0,
-                executability=0.0,
+                executability=exec_score,
                 ordering_bonus=0.0,
             )
 

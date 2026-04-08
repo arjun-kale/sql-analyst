@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from app.graders.base import BaseGrader
 from app.models import SQLReward
@@ -46,55 +46,126 @@ class HardGrader(BaseGrader):
     def __init__(self, conn):
         super().__init__(conn)
         gt, _ = self._safe_execute(CANONICAL_QUERY)
-        self._gt_names = {r["name"] for r in gt}
+        self._gt_rows = gt
         self._gt_count = len(gt)
+        self._gt_names = {r["name"] for r in gt}
+        self._gt_by_name: Dict[str, Dict] = {r["name"]: dict(r) for r in gt}
+        self._gt_ordered_names = [r["name"] for r in gt]
+
+    def _find_col(self, row: Dict, candidates: Tuple[str, ...]) -> Optional[str]:
+        for key in row.keys():
+            if key.lower() in candidates:
+                return key
+        return None
 
     def grade(self, query: str, result_rows: List[Dict], error: Optional[str]) -> SQLReward:
         if error or not result_rows:
-            executability = 0.0 if error else 0.1
+            exec_score = 0.0 if error else 0.1
             return SQLReward(
-                value=0.05 * executability,
+                value=round(0.05 * exec_score, 4),
                 correctness=0.0,
                 column_match=0.0,
                 row_match=0.0,
-                executability=executability,
+                executability=exec_score,
                 ordering_bonus=0.0,
             )
 
         executability = 1.0
+
         cols = {k.lower() for k in result_rows[0].keys()}
-        has_segment = "segment" in cols
-        has_spend = any(("spend" in c) or ("revenue" in c) or ("amount" in c) for c in cols)
-        has_days = any(("day" in c) or ("last" in c) for c in cols)
         has_name = "name" in cols
+        has_segment = "segment" in cols
+        has_spend = any(c in {"total_spend", "spend", "revenue", "amount", "total"} for c in cols)
+        has_days = any(
+            c in {"days_since_last_order", "days_since", "days", "recency"} for c in cols
+        )
         column_match = (
-            (0.2 * float(has_name))
-            + (0.3 * float(has_segment))
+            (0.20 * float(has_name))
+            + (0.25 * float(has_segment))
             + (0.35 * float(has_spend))
-            + (0.15 * float(has_days))
+            + (0.20 * float(has_days))
         )
 
-        # Case-insensitive name extraction
-        agent_names: set = set()
+        # --- Name overlap (churn identification accuracy) ---
+        agent_names: List[str] = []
         for r in result_rows:
-            lower_keys = {k.lower(): k for k in r.keys()}
-            if "name" in lower_keys:
-                agent_names.add(r[lower_keys["name"]])
+            name_col = self._find_col(r, ("name",))
+            if name_col:
+                agent_names.append(r[name_col])
 
-        overlap = len(agent_names & self._gt_names)
-        row_match = min(overlap / max(self._gt_count, 1), 1.0)
+        agent_name_set = set(agent_names)
+        name_overlap = len(agent_name_set & self._gt_names)
+        name_accuracy = name_overlap / max(self._gt_count, 1)
 
+        # --- Row count penalty ---
         count_ratio = min(len(result_rows), self._gt_count) / max(
             len(result_rows), self._gt_count, 1
         )
-        ordering_bonus = count_ratio
+
+        # --- Value accuracy (total_spend + days_since) per matched row ---
+        spend_matches = 0
+        days_matches = 0
+        matched_rows = 0
+        for r in result_rows:
+            name_col = self._find_col(r, ("name",))
+            if not name_col or r[name_col] not in self._gt_by_name:
+                continue
+            gt = self._gt_by_name[r[name_col]]
+            matched_rows += 1
+
+            spend_col = self._find_col(
+                r, ("total_spend", "spend", "revenue", "amount", "total")
+            )
+            if spend_col:
+                try:
+                    agent_spend = float(r[spend_col])
+                    gt_spend = float(gt["total_spend"])
+                    if gt_spend > 0 and abs(agent_spend - gt_spend) / gt_spend < 0.02:
+                        spend_matches += 1
+                except (ValueError, TypeError):
+                    pass
+
+            days_col = self._find_col(
+                r, ("days_since_last_order", "days_since", "days", "recency")
+            )
+            if days_col:
+                try:
+                    agent_days = int(float(r[days_col]))
+                    gt_days = int(gt["days_since_last_order"])
+                    if abs(agent_days - gt_days) <= 1:
+                        days_matches += 1
+                except (ValueError, TypeError):
+                    pass
+
+        denominator = max(self._gt_count, 1)
+        spend_accuracy = spend_matches / denominator
+        days_accuracy = days_matches / denominator
+
+        row_match = (
+            (0.30 * name_accuracy)
+            + (0.20 * count_ratio)
+            + (0.30 * spend_accuracy)
+            + (0.20 * days_accuracy)
+        )
+
+        # --- Ordering: top-10 by total_spend DESC ---
+        ordering_bonus = 0.0
+        if agent_names:
+            top_n = min(10, len(agent_names), len(self._gt_ordered_names))
+            if top_n > 0:
+                agent_top = agent_names[:top_n]
+                gt_top = self._gt_ordered_names[:top_n]
+                positional_hits = sum(
+                    1 for a, g in zip(agent_top, gt_top) if a == g
+                )
+                ordering_bonus = positional_hits / top_n
 
         correctness = row_match * column_match
         value = round(
-            (0.1 * executability)
-            + (0.25 * column_match)
-            + (0.5 * row_match)
-            + (0.15 * ordering_bonus),
+            (0.05 * executability)
+            + (0.20 * column_match)
+            + (0.50 * row_match)
+            + (0.25 * ordering_bonus),
             4,
         )
         return SQLReward(
