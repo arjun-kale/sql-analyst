@@ -1,45 +1,6 @@
+spec_version: 1
 name: sql-analyst-env
-version: "1.0.0"
-description: >
-  A Business Intelligence SQL Agent Environment where an AI agent
-  answers real business questions by iteratively writing and refining
-  SQL queries against a live e-commerce database.
-author: "Team GridCollect"
-license: MIT
-tags:
-  - sql
-  - business-intelligence
-  - data-analysis
-  - openenv
-  - real-world
-tasks:
-  - id: easy_sales_report
-    name: Monthly Sales Report
-    difficulty: easy
-    description: >
-      Find total revenue by product category for Q4 2023,
-      ordered by revenue descending.
-  - id: medium_customer_ltv
-    name: Customer Lifetime Value Analysis
-    difficulty: medium
-    description: >
-      Identify the top 10 customers by total spend in 2023,
-      including their order count and average order value.
-  - id: hard_churn_cohort
-    name: Churn and Cohort Retention Analysis
-    difficulty: hard
-    description: >
-      Find customers who placed orders in Q2 2023 but had
-      zero activity in Q3 2023 (churned). Return their
-      customer segment, total historical spend, and days
-      since last order.
-api:
-  base_url: http://localhost:7860
-  endpoints:
-    reset: POST /reset
-    step: POST /step
-    state: GET /state
-runtime:
-  language: python
-  version: "3.11"
-  framework: fastapi
+type: space
+runtime: fastapi
+app: app.main:app
+port: 7860

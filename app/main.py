@@ -72,3 +72,9 @@ async def tasks() -> List[Dict]:
 async def health():
     """Service health check."""
     return {"status": "ok", "env": "SQLAnalyst-Env", "version": "1.0.0"}
+
+
+def serve(host: str = "0.0.0.0", port: int = 7860) -> None:
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
