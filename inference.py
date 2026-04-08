@@ -1,14 +1,13 @@
-import json
 import os
 import time
-from typing import List
+from typing import List, Optional
 
 import httpx
 from openai import OpenAI
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-API_KEY = os.environ.get("HF_TOKEN", "none")
+API_KEY = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY")
 ENV_BASE_URL = os.environ.get("ENV_URL", "http://localhost:7860")
 TASKS = ["easy_sales_report", "medium_customer_ltv", "hard_churn_cohort"]
 MAX_STEPS = {"easy_sales_report": 8, "medium_customer_ltv": 10, "hard_churn_cohort": 15}
@@ -21,17 +20,22 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error) -> None:
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    action_clean = action.replace("\n", " ")[:200]
     print(
-        f"[STEP] step={step} action={json.dumps(action)[:80]} "
-        f"reward={reward:.4f} done={done} error={error}",
+        f"[STEP] step={step} action={action_clean} reward={reward:.2f} "
+        f"done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={success} steps={steps} score={score:.4f} rewards={rewards}",
+        f"[END] success={str(success).lower()} steps={steps} "
+        f"score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -83,7 +87,7 @@ Write ONLY a valid SQLite SELECT query. No explanation. No markdown. Just SQL.
 
 
 def run_task(client: OpenAI, task_id: str) -> float:
-    log_start(task=task_id, env="SQLAnalyst-Env", model=MODEL_NAME)
+    log_start(task=task_id, env="sql-analyst-env", model=MODEL_NAME)
     rewards: List[float] = []
     history: List[str] = []
     steps_taken = 0
@@ -106,7 +110,7 @@ def run_task(client: OpenAI, task_id: str) -> float:
             error = obs.get("last_error")
 
             rewards.append(reward)
-            history.append(f"Step {step_num}: {sql[:100]} -> reward {reward:.4f}")
+            history.append(f"Step {step_num}: {sql[:100]} -> reward {reward:.2f}")
             steps_taken = step_num
             log_step(step=step_num, action=sql, reward=reward, done=done, error=error)
 
@@ -118,8 +122,9 @@ def run_task(client: OpenAI, task_id: str) -> float:
         success = score >= SUCCESS_THRESHOLD
     except Exception as exc:
         print(f"[DEBUG] Task {task_id} failed: {exc}", flush=True)
+    finally:
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
-    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
     return score
 
 
@@ -135,7 +140,7 @@ def main() -> None:
 
     print(f"\n=== FINAL SCORES: {all_scores} ===", flush=True)
     avg = sum(all_scores.values()) / len(all_scores)
-    print(f"=== AVERAGE SCORE: {avg:.4f} ===", flush=True)
+    print(f"=== AVERAGE SCORE: {avg:.2f} ===", flush=True)
 
 
 if __name__ == "__main__":
