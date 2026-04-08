@@ -68,21 +68,19 @@ Each step returns a reward in [0.0, 1.0] based on:
 Rewards are **deterministic** — SQL result set comparison is mathematically
 exact with no LLM-as-judge ambiguity.
 
-## Model Benchmark Results (HF Free Models)
+## Model Benchmark Results
 
-Benchmarks were run locally against this environment using:
+Benchmarks were run locally against this environment using the current `inference.py` and `ENV_URL=http://127.0.0.1:7860`.
 
-- `API_BASE_URL=https://router.huggingface.co/v1`
-- `ENV_URL=http://127.0.0.1:7860`
-- the current `inference.py` in this repo
+| Model | Provider | Params | Easy | Medium | Hard | Avg |
+|---|---|---:|---:|---:|---:|---:|
+| `openai/gpt-oss-120b` | Groq | 120B | 1.00 | 1.00 | 1.00 | **1.00** |
+| `google/gemma-4-26B-A4B-it` | HF | 26B (4B active) | 1.00 | 1.00 | 1.00 | **1.00** |
+| `Qwen/Qwen2.5-7B-Instruct` | HF | 7B | 1.00 | 1.00 | 0.69 | **0.90** |
+| `meta-llama/Llama-3.1-8B-Instruct` | HF | 8B | 1.00 | 1.00 | 0.54 | **0.85** |
+| `google/gemma-3n-E4B-it` | HF | 4B | 1.00 | 0.00 | 0.45 | **0.48** |
 
-| Model | Easy | Medium | Hard | Avg Score |
-|---|---:|---:|---:|---:|
-| `Qwen/Qwen2.5-7B-Instruct` | 1.00 | 1.00 | 0.69 | **0.90** |
-| `meta-llama/Llama-3.1-8B-Instruct` | 1.00 | 1.00 | 0.54 | **0.85** |
-| `google/gemma-3n-E4B-it` | 1.00 | 0.00 | 0.45 | **0.48** |
-
-The easy task is solvable by all models in a single step. The medium task requires correct join semantics and filtering — smaller models may struggle. The hard task (churn cohort analysis with CTEs) remains unsolved at 1.0 by any 7-8B model, leaving clear headroom for frontier models.
+The easy task is solvable by all models in a single step. The medium task requires correct join semantics and filtering — smaller models may struggle. The hard task (churn cohort analysis with CTEs) is solved by larger models (26B+) but remains challenging for 7-8B models, providing a clear difficulty gradient.
 
 Scores are deterministic for a given model + prompt loop but may shift if providers update hosted model weights.
 
