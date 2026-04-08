@@ -50,11 +50,11 @@ a business question in natural language, write SQL, inspect results, refine.
 
 ## Tasks
 
-| Task ID               | Difficulty | Max Steps | Description                          |
-|-----------------------|------------|-----------|--------------------------------------|
-| easy_sales_report     | Easy       | 8         | Revenue by category Q4 2023          |
-| medium_customer_ltv   | Medium     | 10        | Top 10 customers by 2023 spend       |
-| hard_churn_cohort     | Hard       | 15        | Q2->Q3 churned customers analysis    |
+| Task ID               | Difficulty | Max Steps | Description                                        |
+|-----------------------|------------|-----------|------------------------------------------------------|
+| easy_sales_report     | Easy       | 8         | Revenue by category Q4 2023                          |
+| medium_customer_ltv   | Medium     | 10        | Top 10 customers by 2023 spend                       |
+| hard_churn_cohort     | Hard       | 20        | Monthly segment revenue trend with window functions  |
 
 ## Reward Function
 
@@ -72,15 +72,23 @@ exact with no LLM-as-judge ambiguity.
 
 Benchmarks were run locally against this environment using the current `inference.py` and `ENV_URL=http://127.0.0.1:7860`.
 
-| Model | Provider | Params | Easy | Medium | Hard | Avg |
+| Model | Provider | Params | Easy | Medium | Hard (steps) | Avg |
 |---|---|---:|---:|---:|---:|---:|
-| `openai/gpt-oss-120b` | Groq | 120B | 1.00 | 1.00 | 1.00 | **1.00** |
-| `google/gemma-4-26B-A4B-it` | HF | 26B (4B active) | 1.00 | 1.00 | 1.00 | **1.00** |
-| `Qwen/Qwen2.5-7B-Instruct` | HF | 7B | 1.00 | 1.00 | 0.69 | **0.90** |
-| `meta-llama/Llama-3.1-8B-Instruct` | HF | 8B | 1.00 | 1.00 | 0.54 | **0.85** |
-| `google/gemma-3n-E4B-it` | HF | 4B | 1.00 | 0.00 | 0.45 | **0.48** |
+| `google/gemma-4-26B-A4B-it` | HF | 26B (4B active) | 1.00 | 1.00 | 1.00 (1) | **1.00** |
+| `openai/gpt-oss-120b` | Groq | 120B | 1.00 | 1.00 | 0.98 (2) | **0.99** |
+| `Qwen/Qwen2.5-7B-Instruct` | HF | 7B | 1.00 | 1.00 | 0.93 (20) | **0.98** |
+| `google/gemma-3n-E4B-it` | HF | 4B | 1.00 | 1.00 | 0.79 (20) | **0.93** |
+| `meta-llama/Llama-3.1-8B-Instruct` | HF | 8B | 1.00 | 1.00 | 0.57 (12\*) | **0.86** |
 
-The easy task is solvable by all models in a single step. The medium task requires correct join semantics and filtering — smaller models may struggle. The hard task (churn cohort analysis with CTEs) is solved by larger models (26B+) but remains challenging for 7-8B models, providing a clear difficulty gradient.
+\*Llama 3.1 8B run was cut short at step 12 by HF credit limits; real score likely higher with full 20 steps.
+
+**Key observations:**
+- Easy + medium tasks are solvable by all model sizes in 1-2 steps
+- The hard task (window functions: rolling average, MoM growth, ranking) creates clear difficulty tiers:
+  - **26B+** models solve it in 1-2 steps with near-perfect scores
+  - **7-8B** models use all 20 steps and plateau at 0.57-0.93, unable to perfect all window functions simultaneously
+  - **4B** models struggle with persistent syntax errors and peak at 0.79
+- The reward signal shows smooth improvement trajectories (e.g., Qwen 7B: 0.0 → 0.52 → 0.76 → 0.90 → 0.93)
 
 Scores are deterministic for a given model + prompt loop but may shift if providers update hosted model weights.
 
